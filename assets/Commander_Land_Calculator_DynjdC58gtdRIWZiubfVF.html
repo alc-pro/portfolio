@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Commander Land Count Calculator</title>
+<style>
+  :root {
+    --bg: #121212;
+    --panel: #1e1e2a;
+    --accent: #6d4aff;
+    --accent-soft: rgba(109, 74, 255, 0.15);
+    --text: #e8e8ee;
+    --muted: #9a9aae;
+    --good: #4cc98a;
+    --border: #33334a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px;
+    display: flex;
+    justify-content: center;
+  }
+  .wrap { width: 100%; max-width: 720px; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 20px; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .field label { display: block; font-size: 0.78rem; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .field input {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 1rem;
+  }
+  .field input:focus { outline: none; border-color: var(--accent); }
+  .hint { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+  .result {
+    margin-top: 22px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+  }
+  .result .big { font-size: 3rem; font-weight: 700; color: var(--accent); }
+  .result .lbl { color: var(--muted); font-size: 0.85rem; }
+  .breakdown {
+    margin-top: 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    font-size: 0.85rem;
+  }
+  .breakdown table { width: 100%; border-collapse: collapse; }
+  .breakdown td { padding: 6px 4px; border-bottom: 1px solid var(--border); }
+  .breakdown tr:last-child td { border-bottom: none; }
+  .breakdown td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--good); }
+  .neg { color: #e06c75; }
+  .note {
+    margin-top: 16px;
+    font-size: 0.75rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Commander Land Count</h1>
+  <div class="sub">Based on Frank Karsten's updated hypergeometric analysis (TCGplayer, 2024).</div>
+
+  <div class="grid">
+    <div class="field">
+      <label for="amv">Average mana value of spells</label>
+      <input id="amv" type="number" step="0.01" min="0" max="12" value="3.00">
+      <div class="hint">Sum the mana value of all nonland spells, divide by spell count.</div>
+    </div>
+    <div class="field">
+      <label for="ramp">Cheap ramp &amp; card draw spells</label>
+      <input id="ramp" type="number" step="1" min="0" max="99" value="10">
+      <div class="hint">Castable before turn 4 (~MV ≤ 3). Rocks like Sol Ring and Arcane Signet count.</div>
+    </div>
+    <div class="field">
+      <label for="mdfcNM">Non-mythic land/spell MDFCs</label>
+      <input id="mdfcNM" type="number" step="1" min="0" max="99" value="0">
+      <div class="hint">Each counts as 0.38 lands (e.g., Emeria's Call is mythic, so not here).</div>
+    </div>
+    <div class="field">
+      <label for="mdfcM">Mythic land/spell MDFCs</label>
+      <input id="mdfcM" type="number" step="1" min="0" max="99" value="0">
+      <div class="hint">Each counts as 0.74 lands (e.g., Agadeem's Awakening, Sea Gate Restoration).</div>
+    </div>
+  </div>
+
+  <div class="result">
+    <div class="big" id="lands">38</div>
+    <div class="lbl">recommended land-equivalents (of 99 cards)</div>
+  </div>
+
+  <div class="breakdown">
+    <table id="bd"></table>
+  </div>
+
+  <div class="note">
+    Physical lands to actually put in the deck = land-equivalents − (0.62 × non-mythic MDFCs) − (0.26 × mythic MDFCs), since each MDFC slot partially replaces a land.
+    This formula targets casting spells on curve. Casual pods often run ~36 lands; slow metas tolerate more.
+    Source: Karsten, F. (2024). <em>How many lands do you need in your deck? An updated analysis.</em> TCGplayer.
+  </div>
+</div>
+
+<script>
+  const el = id => document.getElementById(id);
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+  function calc() {
+    const amv  = parseFloat(el('amv').value) || 0;
+    const ramp = parseInt(el('ramp').value, 10) || 0;
+    const nm   = parseInt(el('mdfcNM').value, 10) || 0;
+    const m    = parseInt(el('mdfcM').value, 10) || 0;
+
+    const base   = 31.42;
+    const curve  = 3.13 * amv;
+    const rampCut = -0.28 * ramp;
+
+    // Karsten: MDFCs are pre-counted as partial lands inside the formula's total
+    const total = base + curve + rampCut + 0.38 * nm + 0.74 * m;
+    const clampedTotal = clamp(total, 28, 49);
+    const rounded = Math.round(clampedTotal);
+
+    el('lands').textContent = rounded;
+
+    const physLands = rounded - Math.round(0.62 * nm + 0.26 * m);
+
+    const rows = [
+      ['Base count (99-card deck)', base.toFixed(2)],
+      ['+ 3.13 × avg mana value (' + amv.toFixed(2) + ')', '+' + curve.toFixed(2)],
+      ['− 0.28 × cheap ramp/draw (' + ramp + ')', rampCut.toFixed(2)],
+      ['+ MDFC partial credits', '+' + (0.38 * nm + 0.74 * m).toFixed(2)],
+      ['Recommended land-equivalents', clampedTotal.toFixed(2) + ' → ' + rounded],
+      ['Physical lands to sleeve (after MDFC adjustment)', String(Math.max(physLands, 0))]
+    ];
+
+    el('bd').innerHTML = rows.map(r =>
+      '<tr><td>' + r[0] + '</td><td class="num">' + r[1] + '</td></tr>'
+    ).join('');
+  }
+
+  ['amv', 'ramp', 'mdfcNM', 'mdfcM'].forEach(id =>
+    el(id).addEventListener('input', calc)
+  );
+  calc();
+</script>
+</body>
+</html>
